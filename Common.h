@@ -22,8 +22,8 @@ typedef float FLOAT_PREC;
 // model unit in plumed default unit
 // 1 Angstrom (deep model) = 0.1 nm (plumed)
 const double global_length_unit = 0.1;
-// 1 eV (deep model) = 96.487 kJ/mol (plumed)
-const double global_energy_unit = 96.487;
+// 1 eV (deep model) = 96.48530749925792 kJ/mol (plumed)
+const double global_energy_unit = 96.48530749925792;
 // do not convert dipole or polarizability by default 
 const double global_dipole_unit = 1.0;
 const double global_polar_unit  = 1.0;

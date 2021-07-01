@@ -24,9 +24,6 @@
 #include "Common.h"
 #include "deepmd/DeepTensor.h"
 
-// using namespace std;
-// using namespace tensorflow;
-
 namespace PLMD {
 namespace dp_plmd { // to avoid conflicts with libdeepmd
 //+PLUMEDOC COLVAR DEEPPOLAR

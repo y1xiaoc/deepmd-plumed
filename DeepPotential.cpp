@@ -22,13 +22,13 @@
 #include "colvar/ActionRegister.h"
 
 #include "Common.h"
-#include "deepmd/DeepTensor.h"
+#include "deepmd/DeepPot.h"
 
 namespace PLMD {
 namespace dp_plmd { // to avoid conflicts with libdeepmd
-//+PLUMEDOC COLVAR DEEPDIPOLE
+//+PLUMEDOC COLVAR DEEPPOTENTIAL
 /*
-Calculate the dipole moment vector for the system using a deep tensor model.
+Calculate the potential energy for the system using a deep potential model.
 
 A binary graph file of the model and a text file specify the type of each atom are needed.
 The type file should be a list of integers with the i-th element correspond to the type 
@@ -42,64 +42,56 @@ will be ignored and there will be no the pbc handling.
 
 Here's a simple example showing how to use this CV (also the default values of the keywords):
 \plumedfile
-dipole: DEEPDIPOLE MODEL=dipole.pb ATYPE=type.raw UNIT_CVT=1.0
+dp: DEEPPOTENTIAL MODEL=graph.pb ATYPE=type.raw UNIT_CVT=96.487
 \endplumedfile
 */
 //+ENDPLUMEDOC
-class DeepDipole : public Colvar {
+class DeepPotential : public Colvar {
   std::vector<AtomNumber> atoms; 
   bool nopbc;
 public:
-  explicit DeepDipole(const ActionOptions&);
+  explicit DeepPotential(const ActionOptions&);
   void calculate() override;
   static void registerKeywords(Keywords& keys);
 private:
-  deepmd::DeepTensor dp; 
+  deepmd::DeepPot dp; 
   std::vector<int> atype;
-  double dipole_unit;
+  double energy_unit;
   double length_unit;
-  constexpr static int odim = 3;
-  static const std::array<std::string, odim> cpnts;
 };
 
-PLUMED_REGISTER_ACTION(DeepDipole,"DEEPDIPOLE")
+PLUMED_REGISTER_ACTION(DeepPotential,"DEEPPOTENTIAL")
 
-void DeepDipole::registerKeywords(Keywords& keys) {
+void DeepPotential::registerKeywords(Keywords& keys) {
   Colvar::registerKeywords(keys);
-  keys.add("atoms","ATOMS","the group of atoms we are calculating the dipole moment for (defaults to the whole system)");
-  keys.add("compulsory","MODEL","dipole.pb","the DeepDipole model binary graph file");
+  keys.add("atoms","ATOMS","the group of atoms we are calculating the potential energy for (defaults to the whole system)");
+  keys.add("compulsory","MODEL","graph.pb","the potential model binary graph file");
   keys.add("compulsory","ATYPE","type.raw" ,"the file specify the type (in the model) of each atom");
-  keys.add("optional","UNIT_CVT","the unit conversion constant of output dipole (will be multiplied to the graph output, default is 1.0)");
-  keys.addOutputComponent("x","COMPONENTS","the x-component of the dipole");
-  keys.addOutputComponent("y","COMPONENTS","the y-component of the dipole");
-  keys.addOutputComponent("z","COMPONENTS","the z-component of the dipole");
+  keys.add("optional","UNIT_CVT","the unit conversion constant of output energy (will be multiplied to the graph output, default is converting to plumed unit)");
 }
 
-// const int DeepDipole::odim = 3;
-const std::array<std::string, DeepDipole::odim> DeepDipole::cpnts = {"x", "y", "z"};
-
-DeepDipole::DeepDipole(const ActionOptions&ao):
+DeepPotential::DeepPotential(const ActionOptions&ao):
   PLUMED_COLVAR_INIT(ao),
   nopbc(false),
-  dipole_unit(global_dipole_unit),
+  energy_unit(global_energy_unit),
   length_unit(global_length_unit)
 {
+  // make sure the length unit passed to graph is Angstrom
+  length_unit /= plumed.getAtoms().getUnits().getLength();
+  // by default use the plumed unit. but user can change this
+  energy_unit /= plumed.getAtoms().getUnits().getEnergy();
+
   parseAtomList("ATOMS",atoms);
   parseFlag("NOPBC",nopbc);
   std::string graph_file;
   parse("MODEL", graph_file);
   std::string type_file;
   parse("ATYPE", type_file);
-  parse("UNIT_CVT", dipole_unit);
+  parse("UNIT_CVT", energy_unit); // will overwrite the default unit
 
   checkRead();
   
-  for (unsigned k = 0; k < odim; ++k) {
-    addComponentWithDerivatives(cpnts[k]); componentIsNotPeriodic(cpnts[k]);
-  }
-
-  // make sure the length unit passed to graph is Angstrom
-  length_unit /= plumed.getAtoms().getUnits().getLength();
+  addValueWithDerivatives(); setNotPeriodic();
 
   // default use all atoms; otherwise warn the user
   if (atoms.size() == 0) {
@@ -126,11 +118,8 @@ DeepDipole::DeepDipole(const ActionOptions&ao):
   // load deepmd model from graph file; check dimention is correct
   log.printf("  using graph file:  %s \n", graph_file.c_str());
   dp.init(graph_file);
-  if (dp.output_dim() != odim) { 
-    throw std::runtime_error( "invalid graph file! the output dimension should be 3" ); 
-  }
   // dp.print_summary("  DeePMD: ");
-  log.printf("  DeepTensor model initialized successfully\n");
+  log.printf("  DeepPotential model initialized successfully\n");
 
   // load atom types that will be feed into the graph
   load_atype(atype, type_file);
@@ -144,21 +133,21 @@ DeepDipole::DeepDipole(const ActionOptions&ao):
   log.printf("  \n");
 
   // the output unit will be multiple to the graph output
-  log.printf("  output unit conversion set to %f\n", dipole_unit);
+  log.printf("  output unit conversion set to %f\n", energy_unit);
 
   requestAtoms(atoms); 
 }
 
-void DeepDipole::calculate()
+void DeepPotential::calculate()
 {
   if (!nopbc) { makeWhole(); }
   unsigned N = getNumberOfAtoms();
-  std::vector<FLOAT_PREC> _dipole(odim);
-  std::vector<FLOAT_PREC> _force (odim * N * 3);
-  std::vector<FLOAT_PREC> _virial(odim * 9);
+  double _energy;
+  std::vector<FLOAT_PREC> _force (N * 3);
+  std::vector<FLOAT_PREC> _virial(9);
   std::vector<FLOAT_PREC> _coord (N * 3);
   std::vector<FLOAT_PREC> _box   (9); 
-  IndexConverter ic(odim, N, 3);
+  IndexConverter ic(N, 3);
   
   // copy atom coords
   for (unsigned i = 0; i < N; ++i) {
@@ -178,38 +167,29 @@ void DeepDipole::calculate()
     }
   }
 
-  dp.compute(_dipole, _force, _virial, _coord, atype, _box);
+  dp.compute(_energy, _force, _virial, _coord, atype, _box);
 
-  // get back dipole
-  for (unsigned k = 0; k < odim; ++k) {
-    getPntrToComponent(cpnts[k])->set(_dipole[k] * dipole_unit);
-  }
+  // get back energy
+  setValue(_energy * energy_unit);
   // get back force
-  for (unsigned k = 0; k < odim; ++k) {
-    for(unsigned i = 0; i < N; i++) {
-      setAtomsDerivatives(
-        getPntrToComponent(cpnts[k]), 
-        i,
-        - Vector(_force[ic.f(k, i, 0)],
-                 _force[ic.f(k, i, 1)], 
-                 _force[ic.f(k, i, 2)]) 
-        * dipole_unit / length_unit
-      );
-    }
-  }
-  // get back virial
-  for (unsigned k = 0; k < odim; ++k) {
-    // setBoxDerivativesNoPbc(getPntrToComponent(cpnts[k]));
-    // ^^^^^^^^ will ask plumed to calculate virial ^^^^^^^^
-    setBoxDerivatives(
-      getPntrToComponent(cpnts[k]),
-      Tensor( // we manually transpose here; the dp convention is different
-        _virial[k*9 + 0], _virial[k*9 + 3], _virial[k*9 + 6], 
-        _virial[k*9 + 1], _virial[k*9 + 4], _virial[k*9 + 7], 
-        _virial[k*9 + 2], _virial[k*9 + 5], _virial[k*9 + 8]) 
+  for(unsigned i = 0; i < N; i++) {
+    setAtomsDerivatives(
+      i,
+      - Vector(_force[ic.f(i,0)],
+               _force[ic.f(i,1)], 
+               _force[ic.f(i,2)]) 
+      * energy_unit / length_unit
     );
   }
-}
+  // get back virial
+  // setBoxDerivativesNoPbc(); // ask plumed to calculate virial
+  setBoxDerivatives(
+    Tensor( // we manually transpose here
+      _virial[0], _virial[3], _virial[6], 
+      _virial[1], _virial[4], _virial[7], 
+      _virial[2], _virial[5], _virial[8]) 
+  );
+  }
 
 }
 }
