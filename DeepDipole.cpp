@@ -14,137 +14,196 @@
    You should have received a copy of the GNU Lesser General Public License
    along with plumed.  If not, see <http://www.gnu.org/licenses/>.
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ */
+#include "core/ActionAtomistic.h"
+#include "core/PlumedMain.h"
+#include "core/Atoms.h"
+#include "tools/Units.h"
 #include "colvar/Colvar.h"
 #include "colvar/ActionRegister.h"
 
-#include <string>
-#include <cmath>
-
+#include "Common.h"
 #include "deepmd/DeepTensor.h"
 
-using namespace std;
+// using namespace std;
 // using namespace tensorflow;
 
 namespace PLMD {
-namespace deepmd_plmd { // to avoid conflicts with libdeepmd
+namespace dp_plmd { // to avoid conflicts with libdeepmd
 //+PLUMEDOC COLVAR DEEPDIPOLE
 /*
-Calculate the dipole moment for a group of atoms.
-When running with periodic boundary conditions, the atoms should be
-in the proper periodic image. This is done automatically since PLUMED 2.5,
-by considering the ordered list of atoms and rebuilding the molecule with a procedure
-that is equivalent to that done in \ref WHOLEMOLECULES . Notice that
-rebuilding is local to this action. This is different from \ref WHOLEMOLECULES
-which actually modifies the coordinates stored in PLUMED.
-In case you want to recover the old behavior you should use the NOPBC flag.
-In that case you need to take care that atoms are in the correct
-periodic image.
+Calculate the dipole moment vector for the system using a deep tensor model.
+
+A binary graph file of the model and a text file specify the type of each atom are needed.
+The type file should be a list of integers with the i-th element correspond to the type 
+in the deep tensor model of the i-th atom in the system (or specified by you).
+The output is scaled by a factor given by UNIT_CVT, which defaults to 1.
+By default will use periodic boundary conditions, which will be handled by 
+the deep tensor model automatically. In case NOPBC flag is specified, the box
+will be enlarged to avoid the pbc handling. That should be used in a non pbc system.
+
+\par Examples
+
+Here's a simple example showing how to use this CV (also the default values of the keywords):
+\plumedfile
+dipole: DEEPDIPOLE MODEL=dipole.pb ATYPE=type.raw UNIT_CVT=1.0
+\endplumedfile
 */
 //+ENDPLUMEDOC
 class DeepDipole : public Colvar {
-  vector<AtomNumber> atoms; 
+  std::vector<AtomNumber> atoms; 
   bool nopbc;
 public:
   explicit DeepDipole(const ActionOptions&);
   void calculate() override;
   static void registerKeywords(Keywords& keys);
 private:
-  deepmd::DeepTensor dp;    
+  deepmd::DeepTensor dp; 
+  std::vector<int> atype;
+  double dipole_unit;
+  double length_unit;
+  static const int odim;
+  static const std::vector<std::string> cpnts;
 };
 
 PLUMED_REGISTER_ACTION(DeepDipole,"DEEPDIPOLE")
 
 void DeepDipole::registerKeywords(Keywords& keys) {
   Colvar::registerKeywords(keys);
-  keys.add("atoms","ATOMS","the group of atoms we are calculating the dipole moment for"); // TODO assert GROUP: @allatoms
-  keys.add("compulsory","MODEL","dipole.pb","the DeepDipole model file");
+  keys.add("atoms","ATOMS","the group of atoms we are calculating the dipole moment for (defaults to whole system)"); // TODO assert GROUP: @allatoms
+  keys.add("compulsory","MODEL","dipole.pb","the DeepDipole model binary graph file");
+  keys.add("compulsory","ATYPE","type.raw" ,"the file specify the type (in the model) of each atom");
+  keys.add("optional","UNIT_CVT","the unit conversion constant of output dipole (will be multiplied to the graph output, default is 1.0)");
   keys.addOutputComponent("x","COMPONENTS","the x-component of the dipole");
   keys.addOutputComponent("y","COMPONENTS","the y-component of the dipole");
   keys.addOutputComponent("z","COMPONENTS","the z-component of the dipole");
 }
 
+const int DeepDipole::odim = 3;
+const std::vector<std::string> DeepDipole::cpnts = {"x", "y", "z"};
+
 DeepDipole::DeepDipole(const ActionOptions&ao):
   PLUMED_COLVAR_INIT(ao),
-  nopbc(false)
+  nopbc(false),
+  dipole_unit(global_dipole_unit),
+  length_unit(global_length_unit)
 {
-  parseAtomList("ATOMS",atoms); // atoms list
+  parseAtomList("ATOMS",atoms);
   parseFlag("NOPBC",nopbc);
-  string graph_file;
+  std::string graph_file;
   parse("MODEL", graph_file);
+  std::string type_file;
+  parse("ATYPE", type_file);
+  parse("UNIT_CVT", dipole_unit);
 
   checkRead();
   
-  addComponentWithDerivatives("x"); componentIsNotPeriodic("x");
-  addComponentWithDerivatives("y"); componentIsNotPeriodic("y");
-  addComponentWithDerivatives("z"); componentIsNotPeriodic("z");
+  for (unsigned k = 0; k < odim; ++k) {
+    addComponentWithDerivatives(cpnts[k]); componentIsNotPeriodic(cpnts[k]);
+  }
 
-  log.printf("  of %u atoms\n",static_cast<unsigned>(atoms.size()));
-  for(unsigned int i=0; i<atoms.size(); ++i) {
+  // make sure the length unit passed to graph is Angstrom
+  length_unit /= plumed.getAtoms().getUnits().getLength();
+
+  // default use all atoms; otherwise warn the user
+  if (atoms.size() == 0) {
+    atoms.resize(getTotAtoms());
+    for(unsigned i = 0; i < getTotAtoms(); ++i) {
+      atoms[i].setIndex(i);
+    }
+    log.printf("  of all %u atoms in the system\n",static_cast<unsigned>(atoms.size()));
+  } else {
+    log.printf("  of %u atoms\n",static_cast<unsigned>(atoms.size()));
+  }
+  for(unsigned i = 0; i < atoms.size(); ++i) {
     log.printf("  %d", atoms[i].serial());
   }
   log.printf("  \n");
-  if(nopbc) log.printf("  without periodic boundary conditions\n");
-  else      log.printf("  using periodic boundary conditions\n");
+  if (atoms.size() != getTotAtoms()) { 
+    log.printf("  # of atoms provided: %d != # of atoms in the system: %d\n", atoms.size(), getTotAtoms()); 
+    log.printf("  Please make sure you know what you are doing!\n");
+  }
 
+  if(nopbc) { log.printf("  without periodic boundary conditions\n"); }
+  else      { log.printf("  using periodic boundary conditions\n"); }
+
+  // load deepmd model from graph file; check dimention is correct
   log.printf("  using graph file:  %s \n", graph_file.c_str());
   dp.init(graph_file);
-  if (dp.output_dim() != 3) { throw runtime_error( "invalid graph file! the output dimension should be 3" ); }
-  log.printf("  DeepTensor model initialized successfully");
+  if (dp.output_dim() != odim) { 
+    throw std::runtime_error( "invalid graph file! the output dimension should be 3" ); 
+  }
+  // dp.print_summary("  DeePMD: ");
+  log.printf("  DeepTensor model initialized successfully\n");
+
+  // load atom types that will be feed into the graph
+  load_atype(atype, type_file);
+  if (atype.size() != atoms.size()) { 
+    throw std::runtime_error( "invalid atom type file! the size should be equal to the number of atoms" ); 
+  }
+  log.printf("  assign type to atoms\n");
+  for(unsigned i = 0; i < atype.size(); ++i) {
+    log.printf("  %d", atype[i]);
+  }
+  log.printf("  \n");
+
+  // the output unit will be multiple to the graph output
+  log.printf("  output unit conversion set to %f\n", dipole_unit);
 
   requestAtoms(atoms); 
 }
 
 void DeepDipole::calculate()
 {
-    if(!nopbc) makeWhole();
-    unsigned N=getNumberOfAtoms();
-    Vector tot_dipole;
-    for(unsigned i=0; i<N; ++i) {
-    tot_dipole += getPosition(i);
+  unsigned N = getNumberOfAtoms();
+  std::vector<FLOAT_PREC> _dipole(odim);
+  std::vector<FLOAT_PREC> _force (odim * N * 3);
+  std::vector<FLOAT_PREC> _virial(odim * 9);
+  std::vector<FLOAT_PREC> _coord (N * 3);
+  std::vector<FLOAT_PREC> _box   (9); 
+  IndexConverter ic(odim, N, 3);
+  
+  // copy atom coords
+  for (unsigned i = 0; i < N; ++i) {
+    for (unsigned j = 0; j < 3; ++j) {
+      _coord[ic.f(i,j)] = getPosition(i)[j] / length_unit;
     }
-    Value* valuex=getPntrToComponent("x");
-    Value* valuey=getPntrToComponent("y");
-    Value* valuez=getPntrToComponent("z");
-    for(unsigned i=0; i<N; i++) {
-      setAtomsDerivatives(valuex,i,Vector(1.0,0.0,0.0));
-      setAtomsDerivatives(valuey,i,Vector(0.0,1.0,0.0));
-      setAtomsDerivatives(valuez,i,Vector(0.0,0.0,1.0));
+  }
+  // copy box tensor
+  Tensor box = getBox();
+  if (nopbc) { 
+    _box.clear(); 
+  } else {// manually enlarge box to avoid pbc
+    for (unsigned i = 0; i < 3; ++i) {
+      for (unsigned j = 0; j < 3; ++j) {
+        _box[i * 3 + j] = box[i][j] / length_unit;
+      }
     }
-    setBoxDerivativesNoPbc(valuex);
-    setBoxDerivativesNoPbc(valuey);
-    setBoxDerivativesNoPbc(valuez);
-    valuex->set(tot_dipole[0]);
-    valuey->set(tot_dipole[1]);
-    valuez->set(tot_dipole[2]);
   }
 
-// // DeepWannier, to be completed
-// void DeepDipole::calculate()
-// {
-//     if(!nopbc) makeWhole();
-//     unsigned N=getNumberOfAtoms();  // this function returns the number of needed atoms instead of all atoms
-//     // get input tensor,  declare atomic dipole and tot_dipole as tensors
-//     // get atomic_dipole = DW_model(input_tensor)
-//     // atomic dipole is (ncenter,3) matrix, in our case, ncenter = N/5
-//     for(unsigned i=0; i<ncenter; ++i) {
-//     tot_dipole += atomic_dipole[i];
-//     }
-//     Value* valuex=getPntrToComponent("x");
-//     Value* valuey=getPntrToComponent("y");
-//     Value* valuez=getPntrToComponent("z");
-//     // declare DP_grad_x/y/z, evaluate gradient of tot_dipole w.r.t atomic coordinates
-//     for(unsigned i=0; i<N; i++) {
-//       setAtomsDerivatives(valuex,i,DP_grad_x[i]);
-//       setAtomsDerivatives(valuey,i,DP_grad_y[i]);
-//       setAtomsDerivatives(valuez,i,DP_grad_z[i]);
-//     }
-//     // evaluate gradient of DP_grad_x/y/z w.r.t cell, const Tensor&d is (3,3) matrix.
-//     setBoxDerivatives(valuex, const Tensor&d)
-//     setBoxDerivatives(valuey, const Tensor&d)
-//     setBoxDerivatives(valuez, const Tensor&d)
-//     valuex->set(tot_dipole[0]);
-//     valuey->set(tot_dipole[1]);
-//     valuez->set(tot_dipole[2]);
-//   }
+  dp.compute(_dipole, _force, _virial, _coord, atype, _box);
+
+  // get back dipole
+  for (unsigned k = 0; k < odim; ++k) {
+    getPntrToComponent(cpnts[k])->set(_dipole[k] * dipole_unit);
+  }
+  // get back force
+  for (unsigned k = 0; k < odim; ++k) {
+    for(unsigned i = 0; i < N; i++) {
+      setAtomsDerivatives(
+        getPntrToComponent(cpnts[k]), 
+        i,
+        - Vector(_force[ic.f(k, i, 0)],
+                 _force[ic.f(k, i, 1)], 
+                 _force[ic.f(k, i, 2)]) 
+        * dipole_unit / length_unit
+      );
+    }
+  }
+  // no virial or box deriv needed
+  for (unsigned k = 0; k < odim; ++k) {
+    setBoxDerivativesNoPbc(getPntrToComponent(cpnts[k]));
+  }
+}
+
 }
 }
