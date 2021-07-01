@@ -29,9 +29,9 @@
 
 namespace PLMD {
 namespace dp_plmd { // to avoid conflicts with libdeepmd
-//+PLUMEDOC COLVAR DEEPDIPOLE
+//+PLUMEDOC COLVAR DEEPPOLAR
 /*
-Calculate the dipole moment vector for the system using a deep tensor model.
+Calculate the polarizability tensor for the system using a deep tensor model.
 
 A binary graph file of the model and a text file specify the type of each atom are needed.
 The type file should be a list of integers with the i-th element correspond to the type 
@@ -39,52 +39,61 @@ in the deep tensor model of the i-th atom in the system (or specified by you).
 The output is scaled by a factor given by UNIT_CVT, which defaults to 1.
 By default will use periodic boundary conditions, which will be handled by 
 the deep tensor model automatically. In case NOPBC flag is specified, the box
-will be ignored and there will be no the pbc handling.
+will be enlarged to avoid the pbc handling. That should be used in a non pbc system.
 
 \par Examples
 
 Here's a simple example showing how to use this CV (also the default values of the keywords):
 \plumedfile
-dipole: DEEPDIPOLE MODEL=dipole.pb ATYPE=type.raw UNIT_CVT=1.0
+polar: DEEPPOLAR MODEL=polar.pb ATYPE=type.raw UNIT_CVT=1.0
 \endplumedfile
 */
 //+ENDPLUMEDOC
-class DeepDipole : public Colvar {
+class DeepPolar : public Colvar {
   std::vector<AtomNumber> atoms; 
   bool nopbc;
 public:
-  explicit DeepDipole(const ActionOptions&);
+  explicit DeepPolar(const ActionOptions&);
   void calculate() override;
   static void registerKeywords(Keywords& keys);
 private:
   deepmd::DeepTensor dp; 
   std::vector<int> atype;
-  double dipole_unit;
+  double polar_unit;
   double length_unit;
-  constexpr static int odim = 3;
+  constexpr static int odim = 9;
   static const std::array<std::string, odim> cpnts;
 };
 
-PLUMED_REGISTER_ACTION(DeepDipole,"DEEPDIPOLE")
+PLUMED_REGISTER_ACTION(DeepPolar,"DEEPPOLAR")
 
-void DeepDipole::registerKeywords(Keywords& keys) {
+void DeepPolar::registerKeywords(Keywords& keys) {
   Colvar::registerKeywords(keys);
-  keys.add("atoms","ATOMS","the group of atoms we are calculating the dipole moment for (defaults to the whole system)");
-  keys.add("compulsory","MODEL","dipole.pb","the DeepDipole model binary graph file");
+  keys.add("atoms","ATOMS","the group of atoms we are calculating the polarizability for (defaults to the whole system)");
+  keys.add("compulsory","MODEL","polar.pb","the DeepPolar model binary graph file");
   keys.add("compulsory","ATYPE","type.raw" ,"the file specify the type (in the model) of each atom");
-  keys.add("optional","UNIT_CVT","the unit conversion constant of output dipole (will be multiplied to the graph output, default is 1.0)");
-  keys.addOutputComponent("x","COMPONENTS","the x-component of the dipole");
-  keys.addOutputComponent("y","COMPONENTS","the y-component of the dipole");
-  keys.addOutputComponent("z","COMPONENTS","the z-component of the dipole");
+  keys.add("optional","UNIT_CVT","the unit conversion constant of output polar tensor (will be multiplied to the graph output, default is 1.0)");
+  keys.addOutputComponent("xx","COMPONENTS","the xx-component of the polarizability tensor");
+  keys.addOutputComponent("xy","COMPONENTS","the xy-component of the polarizability tensor");
+  keys.addOutputComponent("xz","COMPONENTS","the xz-component of the polarizability tensor");
+  keys.addOutputComponent("yx","COMPONENTS","the yx-component of the polarizability tensor");
+  keys.addOutputComponent("yy","COMPONENTS","the yy-component of the polarizability tensor");
+  keys.addOutputComponent("yz","COMPONENTS","the yz-component of the polarizability tensor");
+  keys.addOutputComponent("zx","COMPONENTS","the zx-component of the polarizability tensor");
+  keys.addOutputComponent("zy","COMPONENTS","the zy-component of the polarizability tensor");
+  keys.addOutputComponent("zz","COMPONENTS","the zz-component of the polarizability tensor");
 }
 
-// const int DeepDipole::odim = 3;
-const std::array<std::string, DeepDipole::odim> DeepDipole::cpnts = {"x", "y", "z"};
+const std::array<std::string, DeepPolar::odim> DeepPolar::cpnts = {
+  "xx", "xy", "xz", 
+  "yx", "yy", "yz", 
+  "zx", "zy", "zz", 
+};
 
-DeepDipole::DeepDipole(const ActionOptions&ao):
+DeepPolar::DeepPolar(const ActionOptions&ao):
   PLUMED_COLVAR_INIT(ao),
   nopbc(false),
-  dipole_unit(global_dipole_unit),
+  polar_unit(global_polar_unit),
   length_unit(global_length_unit)
 {
   parseAtomList("ATOMS",atoms);
@@ -93,7 +102,7 @@ DeepDipole::DeepDipole(const ActionOptions&ao):
   parse("MODEL", graph_file);
   std::string type_file;
   parse("ATYPE", type_file);
-  parse("UNIT_CVT", dipole_unit);
+  parse("UNIT_CVT", polar_unit);
 
   checkRead();
   
@@ -147,16 +156,16 @@ DeepDipole::DeepDipole(const ActionOptions&ao):
   log.printf("  \n");
 
   // the output unit will be multiple to the graph output
-  log.printf("  output unit conversion set to %f\n", dipole_unit);
+  log.printf("  output unit conversion set to %f\n", polar_unit);
 
   requestAtoms(atoms); 
 }
 
-void DeepDipole::calculate()
+void DeepPolar::calculate()
 {
   if (!nopbc) { makeWhole(); }
   unsigned N = getNumberOfAtoms();
-  std::vector<FLOAT_PREC> _dipole(odim);
+  std::vector<FLOAT_PREC> _polar(odim);
   std::vector<FLOAT_PREC> _force (odim * N * 3);
   std::vector<FLOAT_PREC> _virial(odim * 9);
   std::vector<FLOAT_PREC> _coord (N * 3);
@@ -181,11 +190,11 @@ void DeepDipole::calculate()
     }
   }
 
-  dp.compute(_dipole, _force, _virial, _coord, atype, _box);
+  dp.compute(_polar, _force, _virial, _coord, atype, _box);
 
-  // get back dipole
+  // get back polar
   for (unsigned k = 0; k < odim; ++k) {
-    getPntrToComponent(cpnts[k])->set(_dipole[k] * dipole_unit);
+    getPntrToComponent(cpnts[k])->set(_polar[k] * polar_unit);
   }
   // get back force
   for (unsigned k = 0; k < odim; ++k) {
@@ -196,7 +205,7 @@ void DeepDipole::calculate()
         - Vector(_force[ic.f(k, i, 0)],
                  _force[ic.f(k, i, 1)], 
                  _force[ic.f(k, i, 2)]) 
-        * dipole_unit / length_unit
+        * polar_unit / length_unit
       );
     }
   }
