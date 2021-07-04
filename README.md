@@ -5,7 +5,7 @@ This module provides interface to use DeePMD models (deep potential and deep ten
 ## Installation
 
 This module is to be patched to plumed source code and compiled together. 
-To use it, frist copy the `deepmd` folder into the `src` folder of plumed directory. 
+To use it, first make sure deepmd and tensorflow has been installed correctly. Then copy the `deepmd` folder into the `src` folder of plumed directory. 
 Then see the following script:
 ```bash
 # do not set the following if you do not use cuda
@@ -17,6 +17,8 @@ DEEPMD_CUDA_LINK="-ldeepmd_op_cuda"
 Note here we follow the same convension as installing DeePMD, let `plumed_root` be the place you want to install plumed to. 
 And `tensorflow_root` and `deepmd_root` should be set properly to their installed path.
 After that you can `make` and `make install` as usual.
+
+An example install script that install deepmd, lammps and plumed all into a conda environment can be found [here](./install_with_conda.sh). Note it will use gpu and install cuda related things. You may need to modify it to fit your needs.
 
 ## Usage
 
