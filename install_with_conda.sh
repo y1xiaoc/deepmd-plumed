@@ -1,6 +1,6 @@
 conda create -n dpdev
 source activate dpdev
-conda install -c deepmodeling -c conda-forge -c nvidia --override-channels libtensorflow_cc=*=gpu_cuda11* cudatoolkit=11  gxx_linux-64=8 gcc_linux-64=8 openmpi-mpicc openmpi-mpicxx fftw cmake gtest gmock
+conda install -c deepmodeling -c conda-forge -c nvidia --override-channels libtensorflow_cc=*=gpu_cuda11* cudatoolkit=11  gxx_linux-64 gcc_linux-64 gfortran_linux-64 openmpi=4 openmpi-mpicc openmpi-mpicxx openmpi-mpifort fftw cmake gtest gmock
 # make sure numpy is 1.19 to avoid conflict with tf
 conda install -c conda-forge numpy=1.19 scipy ipython jupyter matplotlib
 # or if you want mkl
