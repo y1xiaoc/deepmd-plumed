@@ -188,6 +188,7 @@ void DeepPotential::calculate()
       _virial[0], _virial[3], _virial[6], 
       _virial[1], _virial[4], _virial[7], 
       _virial[2], _virial[5], _virial[8]) 
+    * energy_unit
   );
   }
 

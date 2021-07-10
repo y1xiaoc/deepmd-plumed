@@ -207,6 +207,7 @@ void DeepDipole::calculate()
         _virial[k*9 + 0], _virial[k*9 + 3], _virial[k*9 + 6], 
         _virial[k*9 + 1], _virial[k*9 + 4], _virial[k*9 + 7], 
         _virial[k*9 + 2], _virial[k*9 + 5], _virial[k*9 + 8]) 
+      * dipole_unit
     );
   }
 }
