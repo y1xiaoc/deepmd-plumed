@@ -136,7 +136,7 @@ DeepPolar::DeepPolar(const ActionOptions&ao):
   log.printf("  using graph file:  %s \n", graph_file.c_str());
   dp.init(graph_file);
   if (dp.output_dim() != odim) { 
-    throw std::runtime_error( "invalid graph file! the output dimension should be 3" ); 
+    throw std::runtime_error( "invalid graph file! the output dimension should be 9" ); 
   }
   // dp.print_summary("  DeePMD: ");
   log.printf("  DeepTensor model initialized successfully\n");
