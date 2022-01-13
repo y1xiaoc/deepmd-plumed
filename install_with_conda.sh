@@ -1,3 +1,4 @@
+## both py3.7/8 tested. 
 conda create -n dp-test python=3.7
 conda activate dp-test
 
@@ -15,7 +16,8 @@ conda install numpy=1.19 cmake fftw
 # export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 # export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-##  TF2.6.0 would require C++14 standards, so we need to do some tricks for the compilation of plumed and lammps
+## both TF2.6.0/2.7.0 tested
+## TF>=2.6.0 requires C++14 standards. So the compilation of deepmd, plumed and lammps needs to go under -std=c++14
 pip install tensorflow==2.6.0
 
 
